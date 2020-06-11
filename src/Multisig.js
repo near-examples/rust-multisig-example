@@ -67,7 +67,7 @@ const Multisig = (props) => {
         if (key !== contractName) {
             secretKey = (await getKey(key)).secretKey
         }
-        console.log(args)
+        console.log('changeMethod args', args)
         const contract = await window.getContract(secretKey)
         await contract[method](...args)
             .then(async (res) => {
@@ -181,12 +181,14 @@ const Multisig = (props) => {
                 </p>
                 <div>
                     <button onClick={() => copyToClipboard(public_key)}>Copy PK</button>
-                    { 
+                    <button onClick={() => setKey(public_key)}>Use This Key</button>
+                    <button onClick={() => removeKey(public_key)}>Remove Key</button>
+                    {/* { 
                         multisig ?
                             <button onClick={() => setKey(public_key)}>Use This Key</button>
                             :
                             <button onClick={() => removeKey(public_key)}>Remove Key</button>
-                    }
+                    } */}
                 </div>
             </div>)
         }   
