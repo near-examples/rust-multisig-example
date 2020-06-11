@@ -1,4 +1,4 @@
-const CONTRACT_NAME = 'msig' || process.env.CONTRACT_NAME ||'rust-multisig-app';
+const CONTRACT_NAME = process.env.CONTRACT_NAME || 'rust-multisig-app';
 
 function getConfig(env) {
     switch (env) {

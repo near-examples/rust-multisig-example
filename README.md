@@ -5,92 +5,75 @@
 <img src="https://nearprotocol.com/wp-content/themes/near-19/assets/img/logo.svg?t=1553011311" width="240">
 </p>
 
-<br />
-<br />
+## Multisig contract account example
+Multisig Contract: https://github.com/near/core-contracts/tree/master/multisig
 
-## Template for NEAR dapps
-### Requirements
+## About the app
+This app allows you to control a multisig contract deployed by a contract account. You start with `num_confirmations: 1` which enables you to add keys to the contract in a single tx.
+
+You can either:
+1. claim the funds
+2. create an account
+3. create a contract account (deploys a locked multisig account)
+
+## Quickstart
+It's recommended you create a new developer account for deploying the multisig.
+```
+near create_account [new_account_id] --masterAccount [some_account.testnet] --initialBalance 50
+```
+Don't forget to update your developer account in the following places:
+```
+/neardev/dev-account
+/neardev/dev-account.env
+```
+Now you should be ready to go and the contract will be automatically deployed
+```
+yarn && yarn dev
+```
+
+## Deploying your own contract
+It's recommended you create a sub account to handle your contract deployments:
+```
+near login
+near create_account [account_id] --masterAccount [your_account_id] --initialBalance [1-5 N]
+```
+Now update config.js and set:
+```
+const CONTRACT_NAME = [account_id]
+```
+
+## The Linkdrop contract and calling it from JS
+
+All calls to the contract can be found in `src/Drops.js`.
+
+The original linkdrop contract is here:
+https://github.com/nearprotocol/near-linkdrop
+
+An additional function is added to the regular linkdrop contract:
+```
+pub fn create_limited_contract_account
+```
+This takes 3 additional arguments over the existing `pub fn create_account_and_claim` function.
+In order to successfully invoke from JS you must pass in the following:
+```
+new_account_id: string,
+new_public_key: string,
+allowance: string,
+contract_bytes: [...new Uint8Array(contract_bytes)],
+method_names: [...new Uint8Array(new TextEncoder().encode(`
+    methods,account,is_limited_too_call
+`))]
+```
+
 ##### IMPORTANT: Make sure you have the latest version of NEAR Shell and Node Version > 10.x 
 
 1. [Node.js](https://nodejs.org/en/download/package-manager/)
-2. (optional) near-shell
-
+2. near-shell
 ```
 npm i -g near-shell
-```
-3. (optional) yarn
-```
-npm i -g yarn
 ```
 ### To run on NEAR testnet
 
 ```bash
-npm install && npm dev
-```
-
-with yarn:
-
-```bash
 yarn && yarn dev
 ```
-
-The server that starts is for static assets and by default serves them to http://localhost:1234. Navigate there in your browser to see the app running!
-
-NOTE: Both contract and client-side code will auto-reload once you change source files.
-
-### To run tests
-
-```bash
-npm test
-```
-
-with yarn:
-
-```bash
-yarn test
-```
-
-### Deploy
-
-#### Step 1: Create account for the contract
-
-You'll now want to authorize NEAR shell on your NEAR account, which will allow NEAR Shell to deploy contracts on your NEAR account's behalf \(and spend your NEAR account balance to do so\).
-
-Type the command `near login` which opens a webpage at NEAR Wallet. Follow the instructions there and it will create a key for you, stored in the `/neardev` directory.
-
-#### Step 2:
-
-Modify `src/config.js` line that sets the account name of the contract. Set it to the account id from step 1.
-
-NOTE: When you use [create-near-app](https://github.com/nearprotocol/create-near-app) to create the project it'll infer and pre-populate name of contract based on project folder name.
-
-```javascript
-const CONTRACT_NAME = 'react-template'; /* TODO: Change this to your contract's name! */
-const DEFAULT_ENV = 'development';
-...
-```
-
-#### Step 3:
-
-Check the scripts in the package.json, for frontend and backend both, run the command:
-
-```bash
-npm run deploy
-```
-
-with yarn:
-
-```bash
-yarn deploy
-```
-
-NOTE: This uses [gh-pages](https://github.com/tschaub/gh-pages) to publish resulting website on GitHub pages. It'll only work if project already has repository set up on GitHub. Feel free to modify `deploy:pages` script in `package.json` to deploy elsewhere.
-
-### To Explore
-
-- `assembly/main.ts` for the contract code
-- `src/index.html` for the front-end HTML
-- `src/index.js` for the JavaScript front-end code and how to integrate contracts
-- `src/App.js` for the main React component
-- `src/main.test.js` for the JavaScript integration tests of smart contract
-- `src/App.test.js` for the main React component tests

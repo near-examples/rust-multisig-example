@@ -1,0 +1,1 @@
+near create_account msig --masterAccount mattlock.testnet --initialBalance 50

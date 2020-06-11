@@ -27,10 +27,12 @@
     "nodemon": "^2.0.3",
     "parcel-bundler": "^1.12.4",
     "react-test-renderer": "^16.13.1",
+    "sass": "^1.26.8",
     "shelljs": "^0.8.4"
   },
   "dependencies": {
     "big.js": "^5.2.2",
+    "idb-keyval": "^3.2.0",
     "near-api-js": "^0.24.0",
     "react": "^16.13.1",
     "react-dom": "^16.13.1",
@@ -50,9 +52,9 @@
   },
   "browserslist": {
     "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
     ],
     "development": [
       "last 1 chrome version",

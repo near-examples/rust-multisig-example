@@ -6,3 +6,4 @@ shell.cd('contract');
 // Note: see flags in ./cargo/config
 shell.exec('cargo build --target wasm32-unknown-unknown --release');
 shell.cp('./target/wasm32-unknown-unknown/release/multisig.wasm', './res');
+shell.cp('./target/wasm32-unknown-unknown/release/multisig.wasm', './../src/wasm');
