@@ -4,6 +4,7 @@ import * as nearApi from 'near-api-js';
 import { get, set, del } from 'idb-keyval';
 import { copyToClipboard } from './util/util'
 import './Multisig.scss';
+import { toNear, BOATLOAD_OF_GAS } from './util/near-util';
 
 const contractInterface = {
     Transfer: ['receiver_id', 'amount'],
@@ -23,6 +24,7 @@ const Multisig = (props) => {
     const [requests, setRequests] = useState([])
     const [key, setKey] = useState(contractName)
     const [keys, setKeys] = useState([])
+    const [accessKeys, setAccessKeys] = useState([])
 
     /********************************
     On Mount
@@ -31,11 +33,13 @@ const Multisig = (props) => {
         console.log('Multisig Mounted')
         getRequests()
         updateKeys()
+        getAccessKeys()
     }, [])
     
     /********************************
-     Get the current multisig contract requests
+     Get the current multisig contract state and access keys
      ********************************/
+    const getAccessKeys = async () => setAccessKeys((await window.contractAccount.getAccessKeys()).map((k) => k.public_key.replace('ed25519:', '')))
     const getNumConfirmations = async () => setNumConfirmations(await viewMethod('get_num_confirmations'))
     const getRequests = async() => {
         getNumConfirmations()
@@ -45,45 +49,68 @@ const Multisig = (props) => {
         for (const request_id of requests) {
             // { request_id, confirmations: [...], txs: [{ receiver_id, actions: [{ type, args... }] }] }
             const req = { request_id }
-            req.txs = await viewMethod('get_request', { request_id })
-            req.confirmations = []//await viewMethod('get_confirmations', { request_id }) || []
+            req.tx = await viewMethod('get_request', { request_id })
+            req.confirmations = await viewMethod('get_confirmations', { request_id }) || []
             console.log('REQUEST', req)
             update.push(req)
         }
+
+
+        const request_id = await viewMethod('get_request_nonce')
+        console.log(request_id)
+
+
         setRequests(update)
     }
     /********************************
     Contract methods
     ********************************/
     const changeMethod = async(method, ...args) => {
-        // temp store request
-        let req
-        if (method === 'confirm') {
-            const { request_id } = args[0]
-            req = await viewMethod('get_request', { request_id })
+        console.log('changeMethod', method, ...args)
+        // make sure we don't add more confirmations than we have keys
+        const request = args[0].request
+        if (request) {
+            const action = request.actions[0]
+            console.log(action.type === 'SetNumConfirmations')
+            if (action.type === 'SetNumConfirmations' && accessKeys.length < action.num_confirmations) {
+                alert(`Cannot set num_confirmations > # of access keys (${accessKeys.length}) for multisig. Try adding another access key.`)
+                return
+            }
         }
-        console.log('req', req)
+        // check the current key we're going to use to sign the methods
         let secretKey
         if (key !== contractName) {
             secretKey = (await getKey(key)).secretKey
         }
-        console.log('changeMethod args', args)
         const contract = await window.getContract(secretKey)
-        await contract[method](...args)
-            .then(async (res) => {
-                console.log('CONTRACT RESPONSE', res)
-
-                if (!req) return
-                console.log('CONFIRM REQ', req)
-                if (req.type === 'AddKey') {
-                    await updateKey(req.public_key.replace('ed25519:', ''), 'multisig', true)
-                }
-                if (req.type === 'DeleteKey') {
-                    await updateKey(req.public_key.replace('ed25519:', ''), 'multisig', false)
-                }
-            }).catch((e) => {
+        
+        let res
+        // batch add_request, confirm
+        if (method === 'add_request') {
+            const request_id = await viewMethod('get_request_nonce')
+            const args1 = new TextEncoder().encode(JSON.stringify(...args))
+            const args2 = new TextEncoder().encode(JSON.stringify({ request_id }))
+            console.log('batch add_request & confirm', ...args, request_id)
+            res = await contract.account.signAndSendTransaction(contractName, [
+                nearApi.transactions.functionCall('add_request', args1, BOATLOAD_OF_GAS),
+                nearApi.transactions.functionCall('confirm', args2, BOATLOAD_OF_GAS),
+            ]).catch((e) => {
                 console.log(e)
+                if (e.message.indexOf('Already confirmed this request') > -1) {
+                    alert('You already used this key. Try confirming with another key.')
+                }
             })
+        } else {
+            // normal contract method call e.g. confirm
+            res = await contract[method](...args).catch((e) => {
+                console.log(e)
+                if (e.message.indexOf('Already confirmed this request') > -1) {
+                    alert('You already used this key. Try confirming with another key.')
+                }
+            })
+        }
+        console.log('changeMethod', res)
+        // get the new requests
         getRequests()
     }
     const viewMethod = async(method, ...args) => {
@@ -143,7 +170,6 @@ const Multisig = (props) => {
     const createKey = async() => {
         const newKeyPair = nearApi.KeyPair.fromRandom('ed25519')
         newKeyPair.public_key = newKeyPair.publicKey.toString().replace('ed25519:', '')
-        newKeyPair.multisig = false
         await addKey(newKeyPair)
     }
     /********************************
@@ -156,15 +182,15 @@ const Multisig = (props) => {
         <div>
             { requests.length === 0 && <p>No Requests</p>} 
             { 
-                requests.map(({request_id, txs, confirmations}) => 
+                requests.map(({request_id, tx, confirmations}) => 
                     <div key={request_id} className="key">
                     <p>
-                        <strong># {request_id} - {txs.map(({actions}) => actions.map(({type}) => type).join())}</strong>
+                        <strong># {request_id} - {tx.actions.map(({type}) => type).join()}</strong>
                         <br/>
                         Current Confirmations: {confirmations.length} / {numConfirmations}
                         <br/> {
                             confirmations.length > 0 &&
-                            confirmations.map((c) => <span key={c}><span>{c}</span><br/></span>)
+                            confirmations.map((c) => <span key={c}><span>{c.replace('ed25519:', '')}</span><br/></span>)
                         }
                     </p>
                     </div>
@@ -174,23 +200,25 @@ const Multisig = (props) => {
 
         <h2>Local Storage Keys</h2>
         {
-            keys.map(({public_key, multisig}) => <div key={public_key} className="key">
-                <p>
-                    Public Key: {public_key}<br/>
-                    {multisig ? 'Key is added to multisig contract.' : 'Add this key to the multisig contract. Copy PK, then "AddKey" and "Confirm".'}
-                </p>
-                <div>
-                    <button onClick={() => copyToClipboard(public_key)}>Copy PK</button>
-                    <button onClick={() => setKey(public_key)}>Use This Key</button>
-                    <button onClick={() => removeKey(public_key)}>Remove Key</button>
-                    {/* { 
-                        multisig ?
-                            <button onClick={() => setKey(public_key)}>Use This Key</button>
-                            :
-                            <button onClick={() => removeKey(public_key)}>Remove Key</button>
-                    } */}
+            keys.map(({public_key}) => {
+                 // public key should be in contract accessKeys
+                const multisig = accessKeys.includes(public_key)
+                return <div key={public_key} className="key">
+                    <p>
+                        Public Key: {public_key}<br/>
+                        {multisig ? 'Key is added to multisig contract.' : 'Add this key to the multisig contract. Copy PK, then "AddKey" and "Confirm".'}
+                    </p>
+                    <div>
+                        <button onClick={() => copyToClipboard(public_key)}>Copy PK</button>
+                        { 
+                            multisig ?
+                                <button onClick={() => setKey(public_key)}>Use This Key</button>
+                                :
+                                <button onClick={() => removeKey(public_key)}>Remove from LocalStorage</button>
+                        }
+                    </div>
                 </div>
-            </div>)
+            })
         }   
         { key !== contractName && <button onClick={() => setKey(contractName)}>Set Default</button> } 
         <button onClick={() => createKey()}>Create New Key</button>
@@ -212,12 +240,15 @@ const Multisig = (props) => {
                         if (args.num_confirmations) {
                             args.num_confirmations = parseInt(args.num_confirmations)
                         }
+                        if (args.amount) {
+                            args.amount = toNear(args.amount)
+                        }
                         const MultiSigRequestAction = args
                         const MultiSigRequestTransaction = {
-                            receiver_id: contractName,
+                            receiver_id: args.receiver_id ? args.receiver_id : contractName,
                             actions: [MultiSigRequestAction]
                         }
-                        const MultiSigRequest = { request: [MultiSigRequestTransaction] }
+                        const MultiSigRequest = { request: MultiSigRequestTransaction }
                         changeMethod('add_request', MultiSigRequest)
                     }}
                 >
@@ -225,6 +256,32 @@ const Multisig = (props) => {
                 </button>
             )
         }
+        <br/>
+        {/* <button
+            onClick={() => {
+                let type = 'AddKey'
+                let action1 = { type }
+                for (const arg of contractInterface[type]) {
+                    action1[arg] = window.prompt(`Value for argument '${arg}':\n`)
+                    if (!action1[arg]) return
+                }
+                // action2
+                type = 'DeleteKey'
+                let action2 = { type }
+                for (const arg of contractInterface[type]) {
+                    action2[arg] = window.prompt(`Value for argument '${arg}':\n`)
+                    if (!action2[arg]) return
+                }
+                const MultiSigRequestTransaction = {
+                    receiver_id: contractName,
+                    actions: [action1, action2]
+                }
+                const MultiSigRequest = { request: MultiSigRequestTransaction }
+                changeMethod('add_request', MultiSigRequest)
+            }}
+        >
+            AddKey,DeleteKey
+        </button> */}
 
         <h3>Request Actions</h3>
 

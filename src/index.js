@@ -10,7 +10,7 @@ import {
 } from './util/near-util'
 
 console.log(getSecret)
-const CONTRACT_SECRET = '2UF43MiGyPm59H68CB7qF4NiNQTzym6V79RbvHDTcMAhBz2mo3GxpVjQ8KHppzWwe7fLLEuvG8p9tPuu8NfZSV8q'//getSecret()
+const CONTRACT_SECRET = '3HY1thRZFHJKGrbPZihEEGwSm8s3rBcZG8XsFEHH89cXxTwDXxkZ7KE2Q19iy63kbjkBwWQzzXgMWmrXYSGro4Tf'//getSecret()
 
 // Initializing contract
 async function initContract() {
@@ -24,7 +24,7 @@ async function initContract() {
 	window.walletAccount = new nearApi.WalletAccount(window.near)
 
 	const { contractName } = window.nearConfig
-	const viewMethods = ['get_request', 'list_request_ids', 'get_confirmations', 'get_num_confirmations']
+	const viewMethods = ['get_request', 'list_request_ids', 'get_confirmations', 'get_num_confirmations', 'get_request_nonce']
 	const changeMethods = ['new', 'add_request', 'delete_request', 'confirm']
 	/********************************
 	Set up a contract instance for the currently logged in user
