@@ -86,7 +86,7 @@ const Multisig = (props) => {
         
         let res
         // batch add_request, confirm
-        if (method === 'add_request') {
+        if (false && method === 'add_request') {
             const request_id = await viewMethod('get_request_nonce')
             const args1 = new TextEncoder().encode(JSON.stringify(...args))
             const args2 = new TextEncoder().encode(JSON.stringify({ request_id }))
@@ -112,6 +112,7 @@ const Multisig = (props) => {
         console.log('changeMethod', res)
         // get the new requests
         getRequests()
+        return res
     }
     const viewMethod = async(method, ...args) => {
         let secretKey
@@ -294,11 +295,12 @@ const Multisig = (props) => {
         }}>Confirm Request</button>
         <button onClick={async () => {
             const request_id = parseInt(window.prompt(
-                `Remove which request?\n${JSON.stringify(await viewMethod('list_request_ids'))}`
+                `Check which request?\n${JSON.stringify(await viewMethod('list_request_ids'))}`
             ))
             if (isNaN(request_id)) return
-            changeMethod('delete_request', { request_id })
-        }}>Remove Request</button>
+            const expired = await changeMethod('request_expired', { request_id })
+            alert(expired)
+        }}>Delete Request</button>
     </div>
 }
 
