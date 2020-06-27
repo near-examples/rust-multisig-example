@@ -7,7 +7,7 @@ use near_sdk::json_types::{Base58PublicKey, Base64VecU8, U128, U64};
 use near_sdk::{env, near_bindgen, AccountId, Promise, PromiseOrValue, PublicKey};
 use serde::{Deserialize, Serialize};
 
-/// Unlimited allowance for multisig keys.
+/// Unlimited allowance for multisig keys. There is a gas attack where malicious key can add_request, delete_request repeatedly.
 const DEFAULT_ALLOWANCE: u128 = 0;
 
 pub type RequestId = u32;
@@ -22,6 +22,7 @@ pub struct FunctionCallPermission {
 
 #[derive(Clone, PartialEq, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
 #[serde(tag = "type")]
+/// Lowest level action that can be performed by the multisig contract.
 pub enum MultiSigRequestAction {
     /// Transfers given amount to receiver.
     Transfer {
@@ -55,13 +56,15 @@ pub enum MultiSigRequestAction {
     },
 }
 
+// The request the user makes specifying the receiving account and actions they want to execute (1 tx)
 #[derive(Clone, PartialEq, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
 pub struct MultiSigRequest {
     receiver_id: AccountId,
     actions: Vec<MultiSigRequestAction>,
 }
 
-#[derive(Clone, PartialEq, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
+// An internal request wrapped with the signer_pk to determine num_requests_pk
+#[derive(BorshDeserialize, BorshSerialize)]
 pub struct MultiSigRequestWithSigner {
     request: MultiSigRequest,
     signer_pk: PublicKey,
@@ -98,30 +101,31 @@ impl MultiSigContract {
             requests: Map::new(b"r".to_vec()),
             confirmations: Map::new(b"c".to_vec()),
             num_requests_pk: Map::new(b"k".to_vec()),
-            active_requests_limit: 4,
+            active_requests_limit: 12,
         }
     }
-
+    
     /// Add request for multisig.
     pub fn add_request(&mut self, request: MultiSigRequest) -> RequestId {
+        // request must come from key added to contract account
         assert_eq!(
             env::current_account_id(),
             env::predecessor_account_id(),
             "Predecessor account must much current account"
         );
-        // track how many requests this key has made
+        // check active_requests_limit
         let num_requests = self.num_requests_pk.get(&env::signer_account_pk()).unwrap_or(0) + 1;
         assert!(
             num_requests <= self.active_requests_limit,
-            "Account has too many active requests. Confirm or delete some."
+            "Too many active requests."
         );
         self.num_requests_pk.insert(&env::signer_account_pk(), &num_requests);
         // add the request
-        let request_added = MultiSigRequestWithSigner {
+        let new_request = MultiSigRequestWithSigner {
             signer_pk: env::signer_account_pk(),
             request: request,
         };
-        self.requests.insert(&self.request_nonce, &request_added);
+        self.requests.insert(&self.request_nonce, &new_request);
         let confirmations = HashSet::new();
         self.confirmations
             .insert(&self.request_nonce, &confirmations);
@@ -129,13 +133,21 @@ impl MultiSigContract {
         self.request_nonce - 1
     }
 
+    /// Add request for multisig and confirm with the pk that added.
+    pub fn add_request_and_confirm(&mut self, request: MultiSigRequest) -> RequestId {
+        let request_id = self.add_request(request);
+        self.confirm(request_id);
+        request_id
+    }
+
     /// Remove given request and associated confirmations.
     pub fn delete_request(&mut self, request_id: RequestId) {
         self.valid_request(request_id);
+        let request_with_signer = self.requests.get(&request_id).expect("No such request");
         assert_eq!(
-            self.requests.get(&request_id).expect("No such request").signer_pk,
+            request_with_signer.signer_pk,
             env::signer_account_pk(),
-            "Only the creator of the request can delete"
+            "Only creator of request can delete"
         );
         self.remove_request(request_id);
     }
@@ -163,7 +175,7 @@ impl MultiSigContract {
                             public_key.into(),
                             DEFAULT_ALLOWANCE,
                             env::current_account_id(),
-                            "add_request,delete_request,confirm"
+                            "add_request,add_request_and_confirm,delete_request,confirm"
                                 .to_string()
                                 .into_bytes(),
                         )
@@ -228,7 +240,7 @@ impl MultiSigContract {
         );
         if confirmations.len() as u32 + 1 >= self.num_confirmations {
             let request = self.remove_request(request_id);
-            // !!! if this fails, request and confirmations removed, num_requests_pk decremented
+            // If this fails, request and confirmations are already removed. num_requests_pk decremented
             self.execute_request(request)
         } else {
             confirmations.insert(env::signer_account_pk());
@@ -237,8 +249,15 @@ impl MultiSigContract {
         }
     }
 
+    /********************************
+    View Methods
+    ********************************/
     pub fn get_request(&self, request_id: RequestId) -> MultiSigRequest {
         (self.requests.get(&request_id).expect("No such request")).request
+    }
+
+    pub fn get_num_requests_pk(&self, public_key: PublicKey) -> u32 {
+        self.num_requests_pk.get(&public_key).unwrap_or(0)
     }
 
     pub fn list_request_ids(&self) -> Vec<RequestId> {
@@ -262,27 +281,41 @@ impl MultiSigContract {
         self.request_nonce
     }
 
-    // Helper removes request, removes confirmations and reduces num_requests_pk
+    /********************************
+    Internal Helpers
+    ********************************/
+    // Helper removes request, removes confirmations and reduces num_requests_pk - used in delete and confirm
     fn remove_request(&mut self, request_id: RequestId) -> MultiSigRequest {
-        let request_with_signer = self.requests.remove(&request_id).expect("Failed to remove existing element");
+        // remove confirmations for this request
         self.confirmations.remove(&request_id);
-        let num_requests_pk = self.num_requests_pk.get(&request_with_signer.signer_pk).unwrap_or(0) - 1;
-        self.num_requests_pk.insert(&env::signer_account_pk(), &num_requests_pk);
+        // remove the original request
+        let request_with_signer = self.requests.remove(&request_id).expect("Failed to remove existing element");
+        // decrement num_requests for original request signer
+        let original_signer_pk = request_with_signer.signer_pk;
+        let mut num_requests = self.num_requests_pk.get(&original_signer_pk).unwrap_or(0);
+        // safety check for underrun (unlikely since original_signer_pk must have num_requests_pk > 0)
+        if num_requests > 0 {
+            num_requests = num_requests - 1;
+        }
+        self.num_requests_pk.insert(&original_signer_pk, &num_requests);
         // return request
         request_with_signer.request
     }
     
-    // Helper checking that requested requests by request_id are valid - used by 3 functions
+    // Helper checking that requested requests by request_id are valid - used in delete and confirm
     fn valid_request(&mut self, request_id: RequestId) {
+        // request must come from key added to contract account
         assert_eq!(
             env::current_account_id(),
             env::predecessor_account_id(),
             "Predecessor account must much current account"
         );
+        // request must exist
         assert!(
             self.requests.get(&request_id).is_some(),
             "No such request: either wrong number or already confirmed"
         );
+        // request must have 
         assert!(
             self.confirmations.get(&request_id).is_some(),
             "Internal error: confirmations mismatch requests"
@@ -451,6 +484,48 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_add_request_and_confirm() {
+        let amount = 1_000;
+        testing_env!(context_with_key(
+            Base58PublicKey::try_from("Eg2jtsiMrprn7zgKKUk79qM1hWhANsFyE6JSX4txLEuy")
+                .unwrap()
+                .into(),
+            amount
+        ));
+        let mut c = MultiSigContract::new(3);
+        let request = MultiSigRequest {
+            receiver_id: bob(),
+            actions: vec![MultiSigRequestAction::Transfer {
+                amount: amount.into(),
+            }],
+        };
+        let request_id = c.add_request_and_confirm(request.clone());
+        assert_eq!(c.get_request(request_id), request);
+        assert_eq!(c.list_request_ids(), vec![request_id]);
+        // c.confirm(request_id);
+        assert_eq!(c.requests.len(), 1);
+        assert_eq!(c.confirmations.get(&request_id).unwrap().len(), 1);
+        testing_env!(context_with_key(
+            Base58PublicKey::try_from("HghiythFFPjVXwc9BLNi8uqFmfQc1DWFrJQ4nE6ANo7R")
+                .unwrap()
+                .into(),
+            amount
+        ));
+        c.confirm(request_id);
+        assert_eq!(c.confirmations.get(&request_id).unwrap().len(), 2);
+        assert_eq!(c.get_confirmations(request_id).len(), 2);
+        testing_env!(context_with_key(
+            Base58PublicKey::try_from("2EfbwnQHPBWQKbNczLiVznFghh9qs716QT71zN6L1D95")
+                .unwrap()
+                .into(),
+            amount
+        ));
+        c.confirm(request_id);
+        // TODO: confirm that funds were transferred out via promise.
+        assert_eq!(c.requests.len(), 0);
+    }
+
+    #[test]
     fn test_change_num_confirmations() {
         let amount = 1_000;
         testing_env!(context_with_key(vec![1, 2, 3], amount));
@@ -522,7 +597,7 @@ mod tests {
         let amount = 1_000;
         testing_env!(context_with_key(vec![5, 7, 9], amount));
         let mut c = MultiSigContract::new(3);
-        for _i in 0..10 {
+        for _i in 0..16 {
             c.add_request(MultiSigRequest {
                 receiver_id: bob(),
                 actions: vec![MultiSigRequestAction::Transfer {

@@ -4,7 +4,11 @@ import * as nearApi from 'near-api-js';
 import { get, set, del } from 'idb-keyval';
 import { copyToClipboard } from './util/util'
 import './Multisig.scss';
-import { toNear, BOATLOAD_OF_GAS } from './util/near-util';
+import { toNear, nearTo, BOATLOAD_OF_GAS } from './util/near-util';
+
+import Web3 from 'web3'
+import { sign } from 'tweetnacl'
+
 
 const contractInterface = {
     Transfer: ['receiver_id', 'amount'],
@@ -20,6 +24,7 @@ const Multisig = (props) => {
         contractName,
     } = props
 
+    const [contractBalance, setContractBalance] = useState(0)
     const [numConfirmations, setNumConfirmations] = useState(1)
     const [requests, setRequests] = useState([])
     const [key, setKey] = useState(contractName)
@@ -35,37 +40,44 @@ const Multisig = (props) => {
         updateKeys()
         getAccessKeys()
     }, [])
-    
+
     /********************************
      Get the current multisig contract state and access keys
      ********************************/
+    const getContractBalance = async () => setContractBalance(nearTo((await window.contractAccount.state()).amount))
     const getAccessKeys = async () => setAccessKeys((await window.contractAccount.getAccessKeys()).map((k) => k.public_key.replace('ed25519:', '')))
     const getNumConfirmations = async () => setNumConfirmations(await viewMethod('get_num_confirmations'))
-    const getRequests = async() => {
+    const getRequests = async () => {
+        getContractBalance()
         getNumConfirmations()
+        getAccessKeys()
         const requests = await viewMethod('list_request_ids')
-        console.log('REQUESTS', requests)
+        // console.log('REQUESTS', requests)
         const update = []
         for (const request_id of requests) {
             // { request_id, confirmations: [...], txs: [{ receiver_id, actions: [{ type, args... }] }] }
             const req = { request_id }
             req.tx = await viewMethod('get_request', { request_id })
             req.confirmations = await viewMethod('get_confirmations', { request_id }) || []
-            console.log('REQUEST', req)
+            // console.log('REQUEST', req)
             update.push(req)
         }
-
-
         const request_id = await viewMethod('get_request_nonce')
-        console.log(request_id)
-
-
+        // console.log(request_id)
         setRequests(update)
     }
+
     /********************************
     Contract methods
     ********************************/
-    const changeMethod = async(method, ...args) => {
+    const changeMethod = async (method, ...args) => {
+        // if (method === 'add_request') {
+        //     const useEth = window.confirm('Do you want to add this request using your web3 wallet?')
+        //     if (useEth) {
+        //         signEthRequest(...args)
+        //         return
+        //     }
+        // }
         console.log('changeMethod', method, ...args)
         // make sure we don't add more confirmations than we have keys
         const request = args[0].request
@@ -83,7 +95,7 @@ const Multisig = (props) => {
             secretKey = (await getKey(key)).secretKey
         }
         const contract = await window.getContract(secretKey)
-        
+
         let res
         // batch add_request, confirm
         if (false && method === 'add_request') {
@@ -114,7 +126,7 @@ const Multisig = (props) => {
         getRequests()
         return res
     }
-    const viewMethod = async(method, ...args) => {
+    const viewMethod = async (method, ...args) => {
         let secretKey
         if (key !== contractName) {
             secretKey = (await getKey(key)).secretKey
@@ -123,7 +135,7 @@ const Multisig = (props) => {
         const res = await contract[method](...args).catch((e) => {
             console.log(e)
         })
-        console.log(res)
+        // console.log(res)
         return res
     }
     /********************************
@@ -168,32 +180,73 @@ const Multisig = (props) => {
     Does NOT add to the account / multisig contract, it's only available to be added
     It can be used as a signer once created
     ********************************/
-    const createKey = async() => {
+    const createKey = async () => {
         const newKeyPair = nearApi.KeyPair.fromRandom('ed25519')
         newKeyPair.public_key = newKeyPair.publicKey.toString().replace('ed25519:', '')
+        console.log(newKeyPair)
         await addKey(newKeyPair)
+    }
+    /********************************
+    Creating a key from a web3 address
+    ********************************/
+    const createWeb3Key = async (...args) => {
+        const message = 'Near Multisig Wallet Example'
+        if (window.ethereum) {
+            web3 = new Web3(window.ethereum);
+            try {
+                await window.ethereum.enable()
+                const accounts = await web3.eth.getAccounts()
+                const signature = await web3.eth.personal.sign(message, accounts[0], '')
+                // console.log('signature', signature)
+                // const recovery_id = parseInt(signature.substr(signature.length - 2), 16)
+                const publicKeyWeb3 = await web3.eth.personal.ecRecover(message, signature)
+                const hash = await web3.utils.sha3(signature)
+                const bytes = new Uint8Array(await web3.utils.hexToBytes(hash))
+                // console.log('hash', hash, bytes)
+                const keys = sign.keyPair.fromSeed(bytes);
+                console.log(keys)
+                const keyPair = {
+                    publicKey: { keyType: 0, data: keys.publicKey },
+                    public_key: nearApi.utils.serialize.base_encode(keys.publicKey),
+                    secretKey: nearApi.utils.serialize.base_encode(keys.secretKey),
+                    publicKeyWeb3
+                }
+                console.log(keyPair)
+                await addKey(keyPair)
+            } catch (e) {
+                console.log(e)
+                // User has denied account access to DApp...
+            }
+        } else if (window.web3) {
+            web3 = new Web3(window.web3.currentProvider);
+        } else {
+            alert('You have to install a Web3 wallet!');
+        }
     }
     /********************************
     Render
     ********************************/
     return <div className="root">
 
+        <p>{contractName} - {contractBalance} Ⓝ</p>
+        <p>Confirmations Required: { numConfirmations }</p>
+
         <h2>Current Requests</h2>
 
         <div>
-            { requests.length === 0 && <p>No Requests</p>} 
-            { 
-                requests.map(({request_id, tx, confirmations}) => 
+            {requests.length === 0 && <p>No Requests</p>}
+            {
+                requests.map(({ request_id, tx, confirmations }) =>
                     <div key={request_id} className="key">
-                    <p>
-                        <strong># {request_id} - {tx.actions.map(({type}) => type).join()}</strong>
-                        <br/>
+                        <p>
+                            <strong># {request_id} - {tx.actions.map(({ type }) => type).join()}</strong>
+                            <br />
                         Current Confirmations: {confirmations.length} / {numConfirmations}
-                        <br/> {
-                            confirmations.length > 0 &&
-                            confirmations.map((c) => <span key={c}><span>{c.replace('ed25519:', '')}</span><br/></span>)
-                        }
-                    </p>
+                            <br /> {
+                                confirmations.length > 0 &&
+                                confirmations.map((c) => <span key={c}><span>{c.replace('ed25519:', '')}</span><br /></span>)
+                            }
+                        </p>
                     </div>
                 )
             }
@@ -201,35 +254,33 @@ const Multisig = (props) => {
 
         <h2>Local Storage Keys</h2>
         {
-            keys.map(({public_key}) => {
-                 // public key should be in contract accessKeys
+            keys.map(({ public_key, publicKeyWeb3 }) => {
+                // public key should be in contract accessKeys
                 const multisig = accessKeys.includes(public_key)
                 return <div key={public_key} className="key">
                     <p>
-                        Public Key: {public_key}<br/>
-                        {multisig ? 'Key is added to multisig contract.' : 'Add this key to the multisig contract. Copy PK, then "AddKey" and "Confirm".'}
+                        Public Key: {public_key}<br />
+                        {publicKeyWeb3 && <>ETH Address: {publicKeyWeb3}<br/></>}
+                        {multisig ? <>Key is added to multisig contract.</> : <>Add this key to the multisig contract. Copy PK, then "AddKey" and "Confirm".</>}
                     </p>
                     <div>
                         <button onClick={() => copyToClipboard(public_key)}>Copy PK</button>
-                        { 
-                            multisig ?
-                                <button onClick={() => setKey(public_key)}>Use This Key</button>
-                                :
-                                <button onClick={() => removeKey(public_key)}>Remove from LocalStorage</button>
-                        }
+                        { multisig && <button onClick={() => setKey(public_key)}>Use This Key</button> }
+                        { (!multisig || true) && <button onClick={() => removeKey(public_key)}>Remove from LocalStorage</button> }
                     </div>
                 </div>
             })
-        }   
-        { key !== contractName && <button onClick={() => setKey(contractName)}>Set Default</button> } 
+        }
+        {key !== contractName && <button onClick={() => setKey(contractName)}>Set Default</button>}
+        <button onClick={() => createWeb3Key()}>Add Web3 Key</button>
         <button onClick={() => createKey()}>Create New Key</button>
 
         <h2>Multisig Requests</h2>
 
-        <p style={{padding: 4, background: 'yellow'}}>Signing Key: {key === contractName ? 'Default' : key}</p>
+        <p style={{ padding: 4, background: 'yellow' }}>Signing Key: {key === contractName ? contractName : key}</p>
 
         {
-            Object.keys(contractInterface).map((type) => 
+            Object.keys(contractInterface).map((type) =>
                 <button
                     key={type}
                     onClick={() => {
@@ -250,14 +301,14 @@ const Multisig = (props) => {
                             actions: [MultiSigRequestAction]
                         }
                         const MultiSigRequest = { request: MultiSigRequestTransaction }
-                        changeMethod('add_request', MultiSigRequest)
+                        changeMethod('add_request_and_confirm', MultiSigRequest)
                     }}
                 >
-                    { type }
+                    {type}
                 </button>
             )
         }
-        <br/>
+        <br />
         {/* <button
             onClick={() => {
                 let type = 'AddKey'

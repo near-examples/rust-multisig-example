@@ -9,8 +9,8 @@ import {
     NETWORK_ID, BOATLOAD_OF_GAS,
 } from './util/near-util'
 
-console.log(getSecret)
-const CONTRACT_SECRET = '3R1sAQmP4ExpaAYe2U19e1xjRB37w3EFUavpDZNVdhE7KA9N1GP6mgG3Jkzcyfvi3TGKi35nRR1qbEyG8y9svZ6c'//getSecret()
+// console.log(getSecret)
+const CONTRACT_SECRET = '3pibUb66KGTgaCMUCtw7ncjF1CkHuE9QXCa7UVWqNGvVj5uC5X3c5jS1RtYjzVhgUS9XWSZHRNYZW4GYZv5XUgMZ'//getSecret()
 
 // Initializing contract
 async function initContract() {
@@ -27,7 +27,7 @@ async function initContract() {
 	const viewMethods = ['get_request', 'list_request_ids', 'get_confirmations',
 		'get_num_confirmations', 'get_request_nonce',
 	]
-	const changeMethods = ['new', 'add_request', 'delete_request', 'confirm', 'request_expired']
+	const changeMethods = ['new', 'add_request', 'add_request_and_confirm', 'delete_request', 'confirm', 'request_expired']
 	/********************************
 	Set up a contract instance for the currently logged in user
 	********************************/
@@ -47,7 +47,7 @@ async function initContract() {
 				nearApi.KeyPair.fromString(secretKey)
 			)
 		}
-		console.log('Using secretKey', secretKey)
+		// console.log('Using secretKey', secretKey)
 		const contract = new nearApi.Contract(window.contractAccount, contractName, {
 			viewMethods,
 			changeMethods,
